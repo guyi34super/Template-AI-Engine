@@ -1,0 +1,105 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# Environment Variables (keep example)
+.env
+!.env.example
+
+# Output Directories
+output/extract/*
+output/mapping/*
+output/chat/*
+output/api/*
+output/archive/*
+output/logs/*
+output/raw_extraction/*
+!output/**/.gitkeep
+
+# Data Directories
+data/chroma/*
+!data/chroma/.gitkeep
+power_memory/data/*.db
+power_memory/data/*.db-journal
+
+# Logs
+*.log
+logs/
+logs_final_json/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.sqlite3
+
+# Model Files
+extractors/docling/tmp_model/*
+!extractors/docling/tmp_model/README.md
+extractors/easyocr/models/*
+
+# Temporary Files
+*.tmp
+*.temp
+.cache/
+tmp/
+
+# Documentation (keep only main README)
+docs/*.md
+!docs/.gitkeep
+*SUMMARY.md
+*QUICKSTART.md
+*ARCHITECTURE.md
+SWAGGER_GUIDE.md
+check_mapping_api.py
+
+# Test Files
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+
+# Models (large files)
+extractors/easyocr/models/*.pth
+extractors/docling/tmp_model/*.safetensors
+data/chroma/
+
+# Temporary
+*.tmp
+*.bak
+*.log
+temp/
+tmp/

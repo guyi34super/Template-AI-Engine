@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+sqlalchemy>=2
+chromadb
+pandas
+openpyxl
+python-dotenv
+# Document processing
+python-docx
+PyPDF2
+# LightOnOCR dependencies
+transformers
+torch
+huggingface-hub
+Pillow
+pypdfium2
+requests
