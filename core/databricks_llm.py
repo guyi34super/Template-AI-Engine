@@ -23,16 +23,18 @@ class DatabricksLLM:
     Uses Meta Llama 3.1 8B Instruct model via Databricks serving endpoints.
     """
     
-    def __init__(self, token: Optional[str] = None, endpoint: Optional[str] = None):
+    def __init__(self, token: Optional[str] = None, endpoint: Optional[str] = None, timeout: int = 60):
         """
         Initialize Databricks LLM client.
         
         Args:
             token: Databricks API token. If None, reads from DATABRICKS_TOKEN env var.
             endpoint: Full endpoint URL. If None, reads from DATABRICKS_LLM_ENDPOINT env var.
+            timeout: Request timeout in seconds (default: 60s)
         """
         self.token = token or os.getenv("DATABRICKS_TOKEN")
         self.endpoint = endpoint or os.getenv("DATABRICKS_LLM_ENDPOINT")
+        self.timeout = timeout
         self.supports_json_mode = True  # Flag for JSON mode support
         
         if not self.token:
@@ -46,11 +48,12 @@ class DatabricksLLM:
             "Content-Type": "application/json"
         }
         
-        logger.info("✅ Databricks LLM client initialized")
-        print("✅ Databricks LLM client initialized")
+        logger.info(f"✅ Databricks LLM client initialized (timeout: {self.timeout}s)")
+        print(f"✅ Databricks LLM client initialized (timeout: {self.timeout}s)")
     
     def chat(self, user_message: str, system_prompt: Optional[str] = None, 
-             max_tokens: int = 4096, temperature: float = 0.1, response_format: Optional[Dict] = None) -> str:
+             max_tokens: int = 4096, temperature: float = 0.1, response_format: Optional[Dict] = None, 
+             timeout: Optional[int] = None) -> str:
         """
         Send a chat request to Databricks LLM endpoint.
         
@@ -60,12 +63,16 @@ class DatabricksLLM:
             max_tokens: Maximum tokens to generate (default: 4096)
             temperature: Sampling temperature (default: 0.1 for deterministic output)
             response_format: Optional response format hint (e.g., {"type": "json_object"})
+            timeout: Request timeout in seconds (uses instance timeout if None)
             
         Returns:
             Model's response as string
         """
         if system_prompt is None:
             system_prompt = "You are a helpful AI assistant specialized in data extraction and document processing."
+        
+        # Use instance timeout if not specified
+        request_timeout = timeout if timeout is not None else self.timeout
         
         # Construct messages in the format expected by Llama models
         messages = [
@@ -87,12 +94,12 @@ class DatabricksLLM:
         try:
             logger.debug(f"Sending request to Databricks endpoint: {self.endpoint}")
             
-            # Make API request
+            # Make API request with configurable timeout
             response = requests.post(
                 self.endpoint,
                 headers=self.headers,
                 json=payload,
-                timeout=300  # 5 minute timeout for large documents
+                timeout=request_timeout
             )
             
             # Check for errors
@@ -111,8 +118,8 @@ class DatabricksLLM:
                 return ""
                 
         except requests.exceptions.Timeout:
-            logger.error("Request to Databricks endpoint timed out")
-            raise Exception("Databricks LLM request timed out after 5 minutes")
+            logger.error(f"Request to Databricks endpoint timed out after {request_timeout}s")
+            raise TimeoutError(f"Databricks LLM request timed out after {request_timeout} seconds")
         
         except requests.exceptions.HTTPError as e:
             logger.error(f"HTTP error from Databricks endpoint: {e}")
@@ -127,7 +134,8 @@ class DatabricksLLM:
             logger.error(f"Unexpected error in Databricks LLM: {e}")
             raise
     
-    def chat_batch(self, requests_list: list, max_tokens: int = 4096, temperature: float = 0.1) -> list:
+    def chat_batch(self, requests_list: list, max_tokens: int = 4096, temperature: float = 0.1, 
+                   timeout: Optional[int] = None) -> list:
         """
         Send multiple chat requests as a batch to Databricks (if supported).
         Falls back to parallel individual requests if batch API not available.
@@ -136,10 +144,14 @@ class DatabricksLLM:
             requests_list: List of dicts with 'user_message' and optional 'system_prompt'
             max_tokens: Maximum tokens per response
             temperature: Sampling temperature
+            timeout: Request timeout in seconds (uses instance timeout if None)
             
         Returns:
             List of response strings in same order as requests
         """
+        # Use instance timeout if not specified
+        request_timeout = timeout if timeout is not None else self.timeout
+        
         # Try batch format first
         batch_payload = {
             "requests": [
@@ -160,7 +172,7 @@ class DatabricksLLM:
                 self.endpoint,
                 headers=self.headers,
                 json=batch_payload,
-                timeout=300
+                timeout=request_timeout
             )
             
             # Check if batch API is supported
@@ -179,6 +191,9 @@ class DatabricksLLM:
             else:
                 raise ValueError("Batch API not supported")
                 
+        except requests.exceptions.Timeout:
+            logger.error(f"Batch request timed out after {request_timeout}s")
+            raise TimeoutError(f"Databricks batch request timed out after {request_timeout} seconds")
         except Exception as e:
             logger.warning(f"Batch API not available: {e}")
             # Return None to signal batch not supported, let caller handle parallel execution

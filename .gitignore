@@ -30,15 +30,10 @@ ENV/
 .env
 !.env.example
 
-# Output Directories
-output/extract/*
-output/mapping/*
-output/chat/*
-output/api/*
-output/archive/*
-output/logs/*
-output/raw_extraction/*
-!output/**/.gitkeep
+# Output Directories - Ignore all outputs
+output/
+!output/.gitkeep
+!output/*/.gitkeep
 
 # Data Directories
 data/chroma/*

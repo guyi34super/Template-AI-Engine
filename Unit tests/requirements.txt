@@ -1,0 +1,22 @@
+# Unit Test Requirements
+# Additional dependencies for running unit tests
+
+# Core testing framework (built-in, no installation needed)
+# unittest
+
+# Testing utilities
+unittest-mock>=1.5.0
+
+# For mocking external dependencies
+mock>=4.0.3
+
+# For test coverage reporting (optional)
+coverage>=7.0.0
+
+# For generating test reports (optional)
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-html>=3.2.0
+
+# For testing async code (if needed)
+pytest-asyncio>=0.21.0
