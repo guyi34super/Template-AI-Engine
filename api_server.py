@@ -14,7 +14,7 @@ Endpoints:
 Swagger UI: http://localhost:8000/docs
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -27,6 +27,7 @@ import sys
 import shutil
 import asyncio
 import time
+import traceback
 import numpy as np
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.metrics.pairwise import cosine_similarity
@@ -40,6 +41,12 @@ from extractors.csv import extract_csv
 from extractors.xlsx import extract_xlsx
 from extractors.docx import extract_docx
 from extractors.txt import extract_txt
+
+# Import audit logger
+from audit.audit_logger import AuditLogger
+
+# Initialize global audit logger
+audit = AuditLogger()
 
 try:
     from extractors.easyocr.easyocr_extractor import EasyOCRExtractor
@@ -69,6 +76,73 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Add audit logging middleware for all requests
+@app.middleware("http")
+async def audit_logging_middleware(request: Request, call_next):
+    """Log all API requests and responses with audit logger"""
+    start_time = time.time()
+    request_data = None
+    
+    try:
+        # Try to capture request body for POST/PUT
+        if request.method in ["POST", "PUT", "PATCH"]:
+            try:
+                body = await request.body()
+                request_data = body.decode('utf-8')[:500] if body else None  # Limit to 500 chars
+                # Reset body for downstream handlers
+                async def receive():
+                    return {"type": "http.request", "body": body}
+                request._receive = receive
+            except:
+                pass
+        
+        # Process request
+        response = await call_next(request)
+        
+        # Calculate duration
+        duration = time.time() - start_time
+        
+        # Log successful request
+        audit.log_api_call(
+            endpoint=str(request.url.path),
+            method=request.method,
+            status_code=response.status_code,
+            duration=duration,
+            request_data=request_data,
+            response_data=None,  # Don't log full response (too large)
+            error=None
+        )
+        
+        return response
+        
+    except Exception as e:
+        # Log failed request
+        duration = time.time() - start_time
+        audit.log_api_call(
+            endpoint=str(request.url.path),
+            method=request.method,
+            status_code=500,
+            duration=duration,
+            request_data=request_data,
+            response_data=None,
+            error=str(e)
+        )
+        
+        # Log error details
+        audit.log_error(
+            error_type=type(e).__name__,
+            error_message=str(e),
+            context={
+                "endpoint": str(request.url.path),
+                "method": request.method
+            },
+            traceback_str=traceback.format_exc()
+        )
+        
+        raise
+
 
 # Include chat engine routes
 from chat_engine.api_routes import router as chat_router
@@ -1173,9 +1247,10 @@ Return JSON array ONLY."""
 
 
 def process_extraction(job_id: str, file_path: Path, filename: str):
-    """Background task to process file extraction"""
+    """Background task to process file extraction with timeout and error handling"""
     import time
     overall_start = time.time()
+    max_duration = 300  # 5 minute timeout
     
     try:
         print(f"\n{'='*60}")
@@ -1197,6 +1272,11 @@ def process_extraction(job_id: str, file_path: Path, filename: str):
         # Step 1: Extract text
         print(f"\n📖 STEP 1: EXTRACTION")
         step1_start = time.time()
+        
+        # Check timeout
+        if time.time() - overall_start > max_duration:
+            raise TimeoutError(f"Extraction exceeded {max_duration}s timeout")
+        
         text_content = extract_file_content(file_path)
         step1_elapsed = time.time() - step1_start
         print(f"   ⏱️  Extraction took {step1_elapsed:.1f}s")
@@ -1220,6 +1300,11 @@ def process_extraction(job_id: str, file_path: Path, filename: str):
         # Step 2: Identify template
         print(f"\n🔍 STEP 2: TEMPLATE IDENTIFICATION")
         step2_start = time.time()
+        
+        # Check timeout
+        if time.time() - overall_start > max_duration:
+            raise TimeoutError(f"Extraction exceeded {max_duration}s timeout")
+        
         template_name = identify_template(text_content)
         step2_elapsed = time.time() - step2_start
         print(f"   ⏱️  Template ID took {step2_elapsed:.1f}s")
@@ -1233,6 +1318,10 @@ def process_extraction(job_id: str, file_path: Path, filename: str):
         # Step 3: Structure with LLM - DIFFERENT PATHS FOR PDF vs CSV
         print(f"\n🤖 STEP 3: LLM STRUCTURING")
         step3_start = time.time()
+        
+        # Check timeout
+        if time.time() - overall_start > max_duration:
+            raise TimeoutError(f"Extraction exceeded {max_duration}s timeout")
         
         if is_pdf:
             # PDF path: Use specialized PDF structuring with streaming output
@@ -1278,6 +1367,8 @@ def process_extraction(job_id: str, file_path: Path, filename: str):
         
         # Step 4: Save result
         print(f"\n💾 STEP 4: SAVING RESULTS")
+        record_count = len(structured_data.get("rows", []))
+        
         extraction_jobs[job_id].update({
             "status": "completed",
             "completed_at": datetime.now().isoformat(),
@@ -1289,7 +1380,7 @@ def process_extraction(job_id: str, file_path: Path, filename: str):
                     "confidence": 1.0
                 },
                 "extraction_method": "Databricks LLM API Extraction",
-                "record_count": len(structured_data.get("rows", []))
+                "record_count": record_count
             },
             "data": structured_data
         })
@@ -1311,20 +1402,80 @@ def process_extraction(job_id: str, file_path: Path, filename: str):
         
         overall_elapsed = time.time() - overall_start
         
+        # Log successful extraction
+        audit.log_extraction(
+            operation="extract",
+            file_path=str(output_file),
+            template=template_name,
+            record_count=record_count,
+            duration=overall_elapsed,
+            status="success",
+            error=None
+        )
+        
         print(f"\n{'='*60}")
         print(f"✅ EXTRACTION COMPLETE!")
         print(f"📊 Template: {template_name}")
-        print(f"📊 Records extracted: {len(structured_data.get('rows', []))}")
+        print(f"📊 Records extracted: {record_count}")
         print(f"📁 Output: {output_file.name}")
         print(f"⏱️  Total time: {overall_elapsed:.1f}s")
         print(f"{'='*60}\n")
         
-    except Exception as e:
+    except TimeoutError as e:
+        overall_elapsed = time.time() - overall_start
+        error_msg = str(e)
+        print(f"\n❌ EXTRACTION TIMEOUT: {error_msg}")
+        
         extraction_jobs[job_id].update({
             "status": "failed",
             "completed_at": datetime.now().isoformat(),
-            "error": str(e)
+            "error": error_msg
         })
+        
+        # Log timeout error
+        audit.log_error(
+            error_type="TimeoutError",
+            error_message=error_msg,
+            context={
+                "job_id": job_id,
+                "filename": filename,
+                "duration": overall_elapsed
+            },
+            traceback_str=traceback.format_exc()
+        )
+        
+    except Exception as e:
+        overall_elapsed = time.time() - overall_start
+        error_msg = str(e)
+        print(f"\n❌ EXTRACTION FAILED: {error_msg}")
+        
+        extraction_jobs[job_id].update({
+            "status": "failed",
+            "completed_at": datetime.now().isoformat(),
+            "error": error_msg
+        })
+        
+        # Log extraction error
+        audit.log_extraction(
+            operation="extract",
+            file_path=str(file_path),
+            template="unknown",
+            record_count=0,
+            duration=overall_elapsed,
+            status="failed",
+            error=error_msg
+        )
+        
+        audit.log_error(
+            error_type=type(e).__name__,
+            error_message=error_msg,
+            context={
+                "job_id": job_id,
+                "filename": filename,
+                "duration": overall_elapsed
+            },
+            traceback_str=traceback.format_exc()
+        )
 
 
 # API Endpoints
@@ -1345,12 +1496,40 @@ async def root():
 
 @app.get("/health", tags=["Health"])
 async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "service": "extraction-api"
-    }
+    """Health check endpoint with comprehensive status"""
+    try:
+        # Check LLM connectivity
+        llm_status = "unknown"
+        try:
+            llm = get_llm_instance()
+            llm_status = "healthy" if llm else "unavailable"
+        except Exception as e:
+            llm_status = f"error: {str(e)[:50]}"
+        
+        return {
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "service": "extraction-api",
+            "components": {
+                "llm": llm_status,
+                "audit_logger": "healthy",
+                "extractors": {
+                    "csv": "available",
+                    "xlsx": "available",
+                    "docx": "available",
+                    "txt": "available",
+                    "easyocr": "available" if EasyOCRExtractor else "unavailable"
+                }
+            }
+        }
+    except Exception as e:
+        audit.log_error(
+            error_type=type(e).__name__,
+            error_message=str(e),
+            context={"endpoint": "/health"},
+            traceback_str=traceback.format_exc()
+        )
+        raise HTTPException(status_code=500, detail=f"Health check failed: {str(e)}")
 
 
 @app.post("/extract/upload", response_model=ExtractionJob, tags=["Document Extraction"])
@@ -1365,42 +1544,93 @@ async def upload_file(
     
     Returns a job_id to check the extraction status and retrieve results.
     """
-    # Validate file type
-    allowed_extensions = {'.csv', '.xlsx', '.xls', '.pdf', '.docx', '.txt'}
-    file_ext = Path(file.filename).suffix.lower()
+    job_start = time.time()
+    job_id = None
     
-    if file_ext not in allowed_extensions:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(allowed_extensions)}"
+    try:
+        # Validate file type
+        allowed_extensions = {'.csv', '.xlsx', '.xls', '.pdf', '.docx', '.txt'}
+        file_ext = Path(file.filename).suffix.lower()
+        
+        if file_ext not in allowed_extensions:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(allowed_extensions)}"
+            )
+        
+        # Validate file size (50MB limit)
+        max_size = 50 * 1024 * 1024  # 50MB
+        file_content = await file.read()
+        if len(file_content) > max_size:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large: {len(file_content)} bytes. Max: {max_size} bytes (50MB)"
+            )
+        
+        # Reset file pointer
+        await file.seek(0)
+        
+        # Create job
+        job_id = str(uuid.uuid4())
+        uploaded_at = datetime.now().isoformat()
+        
+        # Save uploaded file temporarily
+        upload_dir = Path("output/uploads")
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        file_path = upload_dir / f"{job_id}{file_ext}"
+        
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        
+        # Create job record
+        extraction_jobs[job_id] = {
+            "job_id": job_id,
+            "status": "pending",
+            "filename": file.filename,
+            "uploaded_at": uploaded_at,
+            "completed_at": None,
+            "error": None
+        }
+        
+        # Start background processing
+        background_tasks.add_task(process_extraction, job_id, file_path, file.filename)
+        
+        # Log successful upload
+        duration = time.time() - job_start
+        audit.log_extraction(
+            operation="upload",
+            file_path=str(file_path),
+            template="pending",
+            record_count=0,
+            duration=duration,
+            status="success",
+            error=None
         )
-    
-    # Create job
-    job_id = str(uuid.uuid4())
-    uploaded_at = datetime.now().isoformat()
-    
-    # Save uploaded file temporarily
-    upload_dir = Path("output/uploads")
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    file_path = upload_dir / f"{job_id}{file_ext}"
-    
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-    
-    # Create job record
-    extraction_jobs[job_id] = {
-        "job_id": job_id,
-        "status": "pending",
-        "filename": file.filename,
-        "uploaded_at": uploaded_at,
-        "completed_at": None,
-        "error": None
-    }
-    
-    # Start background processing
-    background_tasks.add_task(process_extraction, job_id, file_path, file.filename)
-    
-    return ExtractionJob(**extraction_jobs[job_id])
+        
+        return ExtractionJob(**extraction_jobs[job_id])
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        # Log unexpected errors
+        duration = time.time() - job_start
+        audit.log_error(
+            error_type=type(e).__name__,
+            error_message=str(e),
+            context={
+                "endpoint": "/extract/upload",
+                "filename": file.filename if file else "unknown",
+                "job_id": job_id
+            },
+            traceback_str=traceback.format_exc()
+        )
+        
+        if job_id:
+            extraction_jobs[job_id]["status"] = "failed"
+            extraction_jobs[job_id]["error"] = str(e)
+        
+        raise HTTPException(status_code=500, detail=f"File upload failed: {str(e)}")
 
 
 @app.get("/extract/jobs/{job_id}", response_model=ExtractionResult, tags=["Document Extraction"])
@@ -1410,10 +1640,22 @@ async def get_extraction_job(job_id: str):
     
     Returns the complete extraction result including metadata and extracted data.
     """
-    if job_id not in extraction_jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    return ExtractionResult(**extraction_jobs[job_id])
+    try:
+        if job_id not in extraction_jobs:
+            raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+        
+        return ExtractionResult(**extraction_jobs[job_id])
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        audit.log_error(
+            error_type=type(e).__name__,
+            error_message=str(e),
+            context={"endpoint": f"/extract/jobs/{job_id}", "job_id": job_id},
+            traceback_str=traceback.format_exc()
+        )
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve job: {str(e)}")
 
 
 @app.get("/extract/list", response_model=List[ExtractionJob], tags=["Document Extraction"])
@@ -1444,17 +1686,29 @@ async def delete_extraction_job(job_id: str):
     """
     Delete an extraction job and its results
     """
-    if job_id not in extraction_jobs:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    # Delete from memory
-    del extraction_jobs[job_id]
-    
-    # Delete saved file (try both old and new locations)
-    output_file = Path(f"output/json/{job_id}.json")
-    output_file.unlink(missing_ok=True)
-    
-    return {"message": "Job deleted successfully", "job_id": job_id}
+    try:
+        if job_id not in extraction_jobs:
+            raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+        
+        # Delete from memory
+        del extraction_jobs[job_id]
+        
+        # Delete saved file (try both old and new locations)
+        output_file = Path(f"output/json/{job_id}.json")
+        output_file.unlink(missing_ok=True)
+        
+        return {"message": "Job deleted successfully", "job_id": job_id}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        audit.log_error(
+            error_type=type(e).__name__,
+            error_message=str(e),
+            context={"endpoint": f"/extract/jobs/{job_id}", "job_id": job_id},
+            traceback_str=traceback.format_exc()
+        )
+        raise HTTPException(status_code=500, detail=f"Failed to delete job: {str(e)}")
 
 
 @app.on_event("startup")
@@ -1463,6 +1717,18 @@ async def startup_event():
     global power_memory
     power_memory = get_power_memory()
     print("🚀 Server startup complete - PowerMemory ready")
+    print("📊 Audit logging enabled")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Finalize audit logs on shutdown"""
+    try:
+        print("\n🔄 Shutting down server...")
+        audit.finalize()
+        print("✅ Audit logs finalized")
+    except Exception as e:
+        print(f"⚠️  Audit finalization warning: {e}")
 
 
 if __name__ == "__main__":
