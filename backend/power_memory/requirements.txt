@@ -1,0 +1,11 @@
+# PowerMemory Additional Dependencies
+# These are in addition to the existing requirements.txt
+
+# Already included in main requirements:
+# - fastapi
+# - pydantic
+# - sqlite3 (built-in)
+# - pathlib (built-in)
+
+# Optional for enhanced performance
+tiktoken>=0.5.0  # Token counting for accurate chunking

@@ -1,3 +1,0 @@
-"""
-Extraction Unit Tests Package
-"""

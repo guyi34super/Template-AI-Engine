@@ -1,0 +1,20 @@
+.git/
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.db
+*.sqlite3
+*.log
+output/
+data/chroma/
+power_memory/data/
+audit/logs/
+docs/
+Unit tests/
+*.md
+frontend/node_modules/
+frontend/dist/
+backend/__pycache__/
