@@ -64,6 +64,8 @@ Thumbs.db
 extractors/docling/tmp_model/*
 !extractors/docling/tmp_model/README.md
 extractors/easyocr/models/*
+backend/extractors/docling/tmp_model/
+backend/extractors/easyocr/models/*
 
 # Temporary Files
 *.tmp
@@ -90,7 +92,10 @@ htmlcov/
 # Models (large files)
 extractors/easyocr/models/*.pth
 extractors/docling/tmp_model/*.safetensors
+backend/extractors/easyocr/models/*.pth
+backend/extractors/docling/tmp_model/*.safetensors
 data/chroma/
+backend/data/chroma/
 
 # Temporary
 *.tmp

@@ -1,0 +1,142 @@
+version: "3.9"
+
+services:
+  # ===== PostgreSQL Database =====
+  db:
+    image: postgres:16-alpine
+    container_name: airag-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-airag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airag_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-airag}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-airag}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===== Redis Cache =====
+  redis:
+    image: redis:7-alpine
+    container_name: airag-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ===== ChromaDB Vector Database =====
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: airag-chromadb
+    restart: unless-stopped
+    ports:
+      - "8002:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      IS_PERSISTENT: "TRUE"
+      ANONYMIZED_TELEMETRY: "FALSE"
+
+  # ===== Python FastAPI Backend =====
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: airag-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-airag}:${POSTGRES_PASSWORD:-airag_secret}@db:5432/${POSTGRES_DB:-airag}
+      - REDIS_URL=redis://redis:6379/0
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8000
+      - HOST=0.0.0.0
+      - PORT=8000
+      - ENVIRONMENT=production
+    volumes:
+      - backend_output:/app/output
+      - backend_data:/app/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 40s
+      retries: 3
+
+  # ===== React Frontend =====
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: airag-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+  # ===== Rust Data-Tier Service =====
+  # ===== Rust Data-Tier Service =====
+  rust-service:
+    build:
+      context: ./rust-service
+      dockerfile: Dockerfile
+    container_name: airag-rust
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      RUST_HOST: "0.0.0.0"
+      RUST_PORT: "8001"
+      RUST_LOG: "info"
+      RUST_HMAC_SECRET: "${RUST_HMAC_SECRET:-dev-hmac-secret}"
+      JWT_SECRET: "${JWT_SECRET:-dev-secret-key-change-in-production}"
+      JWT_PUBLIC_KEY: "${JWT_PUBLIC_KEY:-}"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ===== Nginx Reverse Proxy =====
+  nginx:
+    image: nginx:alpine
+    container_name: airag-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      - api
+      - frontend
+
+volumes:
+  postgres_data:
+  redis_data:
+  chroma_data:
+  backend_output:
+  backend_data:
