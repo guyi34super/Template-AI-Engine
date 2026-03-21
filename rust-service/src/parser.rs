@@ -171,7 +171,8 @@ pub async fn parse_docx(body: web::Bytes) -> HttpResponse {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(quick_xml::events::Event::Start(ref e)) | Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let local = reader.decoder().decode(e.local_name().as_ref()).unwrap_or_default();
+                let local_name = e.local_name();
+                let local = reader.decoder().decode(local_name.as_ref()).unwrap_or_default();
                 if local == "t" {
                     in_text = true;
                 } else if local == "p" {
@@ -189,7 +190,8 @@ pub async fn parse_docx(body: web::Bytes) -> HttpResponse {
                 }
             }
             Ok(quick_xml::events::Event::End(ref e)) => {
-                let local = reader.decoder().decode(e.local_name().as_ref()).unwrap_or_default();
+                let local_name = e.local_name();
+                let local = reader.decoder().decode(local_name.as_ref()).unwrap_or_default();
                 if local == "t" {
                     in_text = false;
                 }

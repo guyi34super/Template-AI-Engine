@@ -8,7 +8,7 @@ Uses Databricks serving endpoints (Meta Llama 3.1 8B Instruct) for:
 import os
 import json
 import logging
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 import requests
 
 # Import config to load .env file
@@ -275,6 +275,27 @@ class DatabricksLLM:
                 "raw_response": response[:500],
                 "error": f"JSON parse error: {str(e)}"
             }
+
+
+class StubDatabricksLLM:
+    """
+    Minimal LLM stand-in when Databricks is not configured (local / Docker dev).
+    Implements the same `chat(...)` surface as DatabricksLLM so PowerMemory can start.
+    """
+
+    supports_json_mode = True
+
+    def chat(
+        self,
+        user_message: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.1,
+        response_format: Optional[Dict[str, Any]] = None,
+        timeout: Optional[int] = None,
+    ) -> str:
+        logger.warning("StubDatabricksLLM.chat called — configure DATABRICKS_TOKEN for real LLM output")
+        return "[]"
 
 
 # Helper function to get LLM instance

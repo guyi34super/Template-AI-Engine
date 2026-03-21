@@ -28,6 +28,7 @@ import shutil
 import asyncio
 import time
 import traceback
+import os
 
 # Redis client
 from core.redis_client import init_redis, close_redis
@@ -51,7 +52,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 # Add current directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from core.databricks_llm import DatabricksLLM
+from core.databricks_llm import DatabricksLLM, StubDatabricksLLM
 from core.databricks_embeddings import DatabricksEmbeddings
 from extractors.csv import extract_csv
 from extractors.xlsx import extract_xlsx
@@ -228,8 +229,12 @@ def get_llm_instance():
     """Get or create cached LLM instance"""
     global _llm_instance
     if _llm_instance is None:
-        _llm_instance = DatabricksLLM()
-        print("✅ Databricks LLM client initialized (cached)")
+        if os.getenv("DATABRICKS_TOKEN") and os.getenv("DATABRICKS_LLM_ENDPOINT"):
+            _llm_instance = DatabricksLLM()
+            print("✅ Databricks LLM client initialized (cached)")
+        else:
+            _llm_instance = StubDatabricksLLM()
+            print("⚠️ Stub LLM in use (set DATABRICKS_TOKEN + DATABRICKS_LLM_ENDPOINT for Databricks)")
     return _llm_instance
 
 def get_power_memory():
